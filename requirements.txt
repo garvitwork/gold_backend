@@ -9,3 +9,6 @@ xgboost
 requests
 feedparser
 datetime
+pydantic
+fastapi
+uvicorn
