@@ -1,0 +1,11 @@
+pandas
+numpy
+seaborn
+matplotlib
+scikit-learn
+imbalanced-learn
+lightgbm
+xgboost
+requests
+feedparser
+datetime

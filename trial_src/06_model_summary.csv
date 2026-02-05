@@ -1,0 +1,2 @@
+model,accuracy,roc_auc,f1_score,up_precision,down_precision,training_period,test_samples,features_used,timestamp
+Ensemble (LR + GBM + RF),0.6376456161863887,0.6925541642989979,0.6367232520954996,0.6659503809337761,0.6146395681168625,1960-1980,11417,27,2026-02-06 03:01:52
