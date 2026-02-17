@@ -12,3 +12,7 @@ datetime
 pydantic
 fastapi
 uvicorn
+dvc
+dagshub
+mlflow
+pytest

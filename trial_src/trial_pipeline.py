@@ -418,29 +418,29 @@ def train_models(df_engineered):
         lr_model = LogisticRegression(**LOGISTIC_PARAMS)
         lr_model.fit(X_train_balanced, y_train_balanced)
         
-        gbm_model = GradientBoostingClassifier(**GBM_PARAMS)
-        gbm_model.fit(X_train_balanced, y_train_balanced)
+        # gbm_model = GradientBoostingClassifier(**GBM_PARAMS)
+        # gbm_model.fit(X_train_balanced, y_train_balanced)
         
-        rf_model = RandomForestClassifier(**RF_PARAMS)
-        rf_model.fit(X_train_balanced, y_train_balanced)
+        # rf_model = RandomForestClassifier(**RF_PARAMS)
+        # rf_model.fit(X_train_balanced, y_train_balanced)
         
         # Ensemble
-        ensemble = VotingClassifier(
-            estimators=[('lr', lr_model), ('gbm', gbm_model), ('rf', rf_model)],
-            voting='soft',
-            weights=[2.0, 1.0, 1.0]
-        )
-        ensemble.fit(X_train_balanced, y_train_balanced)
+        # ensemble = VotingClassifier(
+        #     estimators=[('lr', lr_model), ('gbm', gbm_model)],
+        #     voting='soft',
+        #     weights=[2.0, 1.0]
+        # )
+        lr_model.fit(X_train_balanced, y_train_balanced)
         
         # Store final trained models
         if test_year == test_years[-1]:
             final_scaler = scaler
-            final_ensemble = ensemble
+            final_ensemble = lr_model
             final_feature_cols = feature_cols
         
         # Predictions
-        results['ensemble']['predictions'].extend(ensemble.predict(X_test_scaled))
-        results['ensemble']['probabilities'].extend(ensemble.predict_proba(X_test_scaled)[:, 1])
+        results['ensemble']['predictions'].extend(lr_model.predict(X_test_scaled))
+        results['ensemble']['probabilities'].extend(lr_model.predict_proba(X_test_scaled)[:, 1])
         results['actuals'].extend(y_test)
         results['years'].extend([test_year] * len(y_test))
         results['dates'].extend(test_year_data['date'].tolist())
