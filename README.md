@@ -118,7 +118,7 @@ Deployed on **Render.com** via `render.yaml`. On startup, the server:
 
 ---
 
-## 🎨 Frontend — AURUM Web Interface
+##  Frontend — AURUM Web Interface
 
 A standalone 3-file web app (`index.html`, `style.css`, `script.js`) — no framework, no build step, no dependencies to install.
 
@@ -142,7 +142,7 @@ Dark luxury editorial aesthetic — built to feel like a professional financial 
 
 ---
 
-## 📁 Project Structure
+##  Project Structure
 
 ```
 Backend_Deploy/
@@ -160,7 +160,7 @@ Frontend_Deploy/
 
 ---
 
-## 🧠 Design Decisions Worth Noting
+##  Design Decisions Worth Noting
 
 **Why Logistic Regression over neural networks?**
 With 70 years of monthly-frequency financial data, deep learning would overfit severely. ElasticNet-regularised logistic regression gives interpretable, stable predictions and generalises well under walk-forward validation.
@@ -179,7 +179,7 @@ Complete experiment reproducibility. Every prediction, every retrain, every metr
 
 ---
 
-## 📊 Societal Impact
+##  Societal Impact
 
 | Who Benefits | How |
 |---|---|
@@ -195,13 +195,13 @@ AURUM does not replace a financial advisor. It democratises access to the same k
 
 ---
 
-## ⚠️ Disclaimer
+##  Disclaimer
 
 This project is for **educational and research purposes only**. Predictions are directional signals based on historical patterns and do not constitute financial advice. Past model performance does not guarantee future accuracy. Always consult a qualified financial advisor before making investment decisions.
 
 ---
 
-## 👨‍💻 Author
+##  Author
 
 **Garvit**
 - DagsHub: [garvitwork/gold_backend](https://dagshub.com/garvitwork/gold_backend)
