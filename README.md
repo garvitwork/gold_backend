@@ -146,7 +146,6 @@ Dark luxury editorial aesthetic — built to feel like a professional financial 
 
 ```
 Backend_Deploy/
-│
 ├── mlflow_full_pipeline.py   # Full 5-stage ML pipeline (training)
 ├── mlflow_api.py             # FastAPI inference service
 ├── requirements.txt          # Python dependencies
