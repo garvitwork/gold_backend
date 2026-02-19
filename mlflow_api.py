@@ -190,31 +190,70 @@ def _build_inference_features(daily_df, n_days: int = FORECAST_DAYS):
     out["gold_fed_lag1"] = out["gold_price_usd"].shift(1) * out["fed_funds_rate"].shift(1)
     out["gold_usd_lag1"] = out["gold_price_usd"].shift(1) * out["usd_inr_rate"].shift(1)
 
-    # Drop NaN warmup rows, then take ONLY the last row as the feature base
+    # Drop NaN warmup rows — keep the tail we need for rolling context
     import pandas as pd
-    out      = out.dropna().reset_index(drop=True)
-    last_row = out.iloc[[-1]]  # single most-recent trading day
+    out = out.dropna().reset_index(drop=True)
 
-    # Latest known gold price (reference price shown for all forecast days)
-    latest_price = float(last_row["gold_price_usd"].iloc[0])
-    latest_date  = last_row["date"].iloc[0]
+    # We need the last ~15 rows to keep a rolling window for iterative updates
+    CONTEXT    = 15
+    base_df    = out.tail(CONTEXT).copy().reset_index(drop=True)
+    last_row   = base_df.iloc[-1]
 
-    # Generate next n_days future business days (Mon-Fri, skip weekends)
+    latest_price = float(last_row["gold_price_usd"])
+    latest_date  = last_row["date"]
+
+    # Historical avg daily return from the last 30 rows (for simulated price walk)
+    recent_prices = list(out["gold_price_usd"].tail(30))
+    daily_returns = [
+        (recent_prices[i] - recent_prices[i-1]) / recent_prices[i-1]
+        for i in range(1, len(recent_prices))
+    ]
+    avg_daily_return = float(np.mean(daily_returns))  # tiny drift per day
+    avg_daily_vol    = float(np.std(daily_returns))   # volatility
+
+    # Generate next n_days future business days
     future_dates = []
     current      = pd.Timestamp(latest_date)
     while len(future_dates) < n_days:
         current = current + pd.offsets.BDay(1)
         future_dates.append(str(current.date()))
 
-    # Repeat the last row features for each future day
-    feature_df = last_row.drop(
-        columns=[c for c in NON_FEATURE_COLS if c in last_row.columns],
-        errors="ignore",
-    )
-    feature_row = np.nan_to_num(feature_df.values, nan=0.0, posinf=0.0, neginf=0.0)
-    X           = np.repeat(feature_row, n_days, axis=0)  # shape: (n_days, n_features)
+    # --- Iterative feature generation ---
+    # For each future day, we simulate the price walk and rebuild key lag features
+    # so the model sees a slightly different feature vector each day.
+    feature_cols = [c for c in base_df.columns if c not in NON_FEATURE_COLS]
+    X_rows  = []
+    prices  = []
+    sim_price = latest_price  # starts at today price, walks forward
 
-    prices = [latest_price] * n_days
+    for step in range(n_days):
+        # Simulate next-day price: drift + mean-reversion noise using numpy seed
+        np.random.seed(step * 7 + 42)  # deterministic but different per day
+        noise     = np.random.normal(avg_daily_return, avg_daily_vol * 0.5)
+        sim_price = sim_price * (1 + noise)
+        prices.append(round(sim_price, 4))
+
+        # Build feature row: copy last known row, then patch lag-dependent features
+        row = base_df.iloc[-1].copy()
+
+        # Update price-derived lag/interaction features with simulated price
+        row["gold_price_usd"]      = sim_price
+        if "gold_price_usd_lag1" in row.index:
+            row["gold_price_usd_lag1"] = latest_price
+        if "gold_fed_lag1" in row.index:
+            row["gold_fed_lag1"] = latest_price * row.get("fed_funds_rate", last_row.get("fed_funds_rate", 0))
+        if "gold_usd_lag1" in row.index:
+            row["gold_usd_lag1"] = latest_price * row.get("usd_inr_rate", last_row.get("usd_inr_rate", 0))
+        if "gold_roc_lag1" in row.index and latest_price != 0:
+            row["gold_roc_lag1"] = (sim_price - latest_price) / latest_price
+        if "gold_ma6_lag1" in row.index:
+            row["price_vs_ma6"] = (sim_price - row["gold_ma6_lag1"]) / row["gold_ma6_lag1"] if row["gold_ma6_lag1"] != 0 else 0
+
+        feat_vals = row[feature_cols].values.astype(float)
+        feat_vals = np.nan_to_num(feat_vals, nan=0.0, posinf=0.0, neginf=0.0)
+        X_rows.append(feat_vals)
+
+    X = np.array(X_rows)
     return X, future_dates, prices
 
 
