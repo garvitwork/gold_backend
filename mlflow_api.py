@@ -190,20 +190,32 @@ def _build_inference_features(daily_df, n_days: int = FORECAST_DAYS):
     out["gold_fed_lag1"] = out["gold_price_usd"].shift(1) * out["fed_funds_rate"].shift(1)
     out["gold_usd_lag1"] = out["gold_price_usd"].shift(1) * out["usd_inr_rate"].shift(1)
 
-    # Drop NaN rows (from rolling/shift warmup), then take last n_days
-    out    = out.dropna().reset_index(drop=True)
-    last_n = out.tail(n_days)
+    # Drop NaN warmup rows, then take ONLY the last row as the feature base
+    import pandas as pd
+    out      = out.dropna().reset_index(drop=True)
+    last_row = out.iloc[[-1]]  # single most-recent trading day
 
-    dates  = [str(d.date()) for d in last_n["date"]]
-    prices = [float(p) for p in last_n["gold_price_usd"]]
+    # Latest known gold price (reference price shown for all forecast days)
+    latest_price = float(last_row["gold_price_usd"].iloc[0])
+    latest_date  = last_row["date"].iloc[0]
 
-    feature_df = last_n.drop(
-        columns=[c for c in NON_FEATURE_COLS if c in last_n.columns],
+    # Generate next n_days future business days (Mon-Fri, skip weekends)
+    future_dates = []
+    current      = pd.Timestamp(latest_date)
+    while len(future_dates) < n_days:
+        current = current + pd.offsets.BDay(1)
+        future_dates.append(str(current.date()))
+
+    # Repeat the last row features for each future day
+    feature_df = last_row.drop(
+        columns=[c for c in NON_FEATURE_COLS if c in last_row.columns],
         errors="ignore",
     )
+    feature_row = np.nan_to_num(feature_df.values, nan=0.0, posinf=0.0, neginf=0.0)
+    X           = np.repeat(feature_row, n_days, axis=0)  # shape: (n_days, n_features)
 
-    X = np.nan_to_num(feature_df.values, nan=0.0, posinf=0.0, neginf=0.0)
-    return X, dates, prices
+    prices = [latest_price] * n_days
+    return X, future_dates, prices
 
 
 # ==============================================================================
