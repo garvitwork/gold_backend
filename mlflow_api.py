@@ -219,39 +219,45 @@ def _build_inference_features(daily_df, n_days: int = FORECAST_DAYS):
         future_dates.append(str(current.date()))
 
     # --- Iterative feature generation ---
-    # For each future day, we simulate the price walk and rebuild key lag features
-    # so the model sees a slightly different feature vector each day.
+    # Each day: prev_price = last predicted price (lag1), sim_price = new predicted price
+    # This means UP/DOWN is relative to the PREVIOUS DAY'S predicted price, not today's.
     feature_cols = [c for c in base_df.columns if c not in NON_FEATURE_COLS]
-    X_rows  = []
-    prices  = []
-    sim_price = latest_price  # starts at today price, walks forward
+    fed_rate  = float(last_row.get("fed_funds_rate", 0))
+    inr_rate  = float(last_row.get("usd_inr_rate", 0))
+
+    X_rows    = []
+    prices    = []
+    prev_price = latest_price   # "yesterday" price — updates each step
+    sim_price  = latest_price   # current simulated price — starts at today
 
     for step in range(n_days):
-        # Simulate next-day price: drift + mean-reversion noise using numpy seed
-        np.random.seed(step * 7 + 42)  # deterministic but different per day
+        # Simulate next-day price based on prev step (deterministic noise)
+        np.random.seed(step * 7 + 42)
         noise     = np.random.normal(avg_daily_return, avg_daily_vol * 0.5)
-        sim_price = sim_price * (1 + noise)
+        sim_price = prev_price * (1 + noise)   # walks from PREVIOUS predicted price
         prices.append(round(sim_price, 4))
 
-        # Build feature row: copy last known row, then patch lag-dependent features
+        # Build feature row using rolling context
         row = base_df.iloc[-1].copy()
 
-        # Update price-derived lag/interaction features with simulated price
+        # lag1 = previous day's predicted price (so UP/DOWN is vs prev day)
         row["gold_price_usd"]      = sim_price
         if "gold_price_usd_lag1" in row.index:
-            row["gold_price_usd_lag1"] = latest_price
+            row["gold_price_usd_lag1"] = prev_price
         if "gold_fed_lag1" in row.index:
-            row["gold_fed_lag1"] = latest_price * row.get("fed_funds_rate", last_row.get("fed_funds_rate", 0))
+            row["gold_fed_lag1"] = prev_price * fed_rate
         if "gold_usd_lag1" in row.index:
-            row["gold_usd_lag1"] = latest_price * row.get("usd_inr_rate", last_row.get("usd_inr_rate", 0))
-        if "gold_roc_lag1" in row.index and latest_price != 0:
-            row["gold_roc_lag1"] = (sim_price - latest_price) / latest_price
-        if "gold_ma6_lag1" in row.index:
-            row["price_vs_ma6"] = (sim_price - row["gold_ma6_lag1"]) / row["gold_ma6_lag1"] if row["gold_ma6_lag1"] != 0 else 0
+            row["gold_usd_lag1"] = prev_price * inr_rate
+        if "gold_roc_lag1" in row.index and prev_price != 0:
+            row["gold_roc_lag1"] = (sim_price - prev_price) / prev_price
+        if "gold_ma6_lag1" in row.index and row["gold_ma6_lag1"] != 0:
+            row["price_vs_ma6"] = (sim_price - row["gold_ma6_lag1"]) / row["gold_ma6_lag1"]
 
         feat_vals = row[feature_cols].values.astype(float)
         feat_vals = np.nan_to_num(feat_vals, nan=0.0, posinf=0.0, neginf=0.0)
         X_rows.append(feat_vals)
+
+        prev_price = sim_price  # next day's lag1 = this day's predicted price
 
     X = np.array(X_rows)
     return X, future_dates, prices
