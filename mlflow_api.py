@@ -232,7 +232,8 @@ def _build_inference_features(daily_df, n_days: int = FORECAST_DAYS):
 
     for step in range(n_days):
         # Simulate next-day price based on prev step (deterministic noise)
-        np.random.seed(step * 7 + 42)
+        today_int = int(datetime.now().strftime("%Y%m%d"))  # changes every day
+        np.random.seed(today_int + step * 7 + 42)
         noise     = np.random.normal(avg_daily_return, avg_daily_vol * 0.5)
         sim_price = prev_price * (1 + noise)   # walks from PREVIOUS predicted price
         prices.append(round(sim_price, 4))
@@ -340,12 +341,14 @@ def _run_inference_sync() -> Dict[str, Any]:
     PREDICTION_STATE.prediction_count  += 1
 
     return {
-        "model_version": MODEL_STORE.model_version,
-        "model_alias":   MODEL_STORE.model_alias,
-        "forecast_days": FORECAST_DAYS,
-        "predicted_at":  PREDICTION_STATE.last_predicted_at,
-        "predictions":   daily_predictions,
-        "mlflow_run_id": run_id,
+        "model_version":     MODEL_STORE.model_version,
+        "model_alias":       MODEL_STORE.model_alias,
+        "forecast_days":     FORECAST_DAYS,
+        "predicted_at":      PREDICTION_STATE.last_predicted_at,
+        "latest_data_date":  str(daily_df["date"].iloc[-1].date()),
+        "latest_gold_price": float(daily_df["gold_price_usd"].iloc[-1]),
+        "predictions":       daily_predictions,
+        "mlflow_run_id":     run_id,
         "mlflow_url": (
             f"https://dagshub.com/{CFG.DAGSHUB_REPO_OWNER}"
             f"/{CFG.DAGSHUB_REPO_NAME}.mlflow"
