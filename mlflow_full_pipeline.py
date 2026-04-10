@@ -280,81 +280,17 @@ def safe_run(stage_name: str, func, *args, **kwargs):
 class DataIngestion:
 
     @staticmethod
-    def _fetch_gold_stooq() -> pd.DataFrame:
-        """Primary: Stooq with browser User-Agent."""
-        from io import StringIO
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36"}
-        r = requests.get("https://stooq.com/q/d/l/?s=xauusd&i=d", headers=headers, timeout=20)
-        r.raise_for_status()
-        if "No data" in r.text or len(r.text) < 50:
-            raise ValueError(f"Stooq returned no data: {r.text[:100]}")
-        df = pd.read_csv(StringIO(r.text))
-        if df.empty or "Close" not in df.columns:
-            raise ValueError("Stooq gold: bad columns")
-        df["Date"] = pd.to_datetime(df["Date"])
-        return df
-
-    @staticmethod
-    def _fetch_gold_fred() -> pd.DataFrame:
-        """Fallback 1: FRED — GOLDAMGBD228NLBM (London AM Gold Fix USD/oz).
-        Same API key already used for fed funds rate — guaranteed to work."""
-        end   = datetime.now().strftime("%Y-%m-%d")
-        start = (datetime.now() - pd.DateOffset(years=CFG.LOOKBACK_YEARS)).strftime("%Y-%m-%d")
-        params = {
-            "series_id":         "GOLDAMGBD228NLBM",
-            "api_key":           CFG.FRED_API_KEY,
-            "file_type":         "json",
-            "observation_start": start,
-            "observation_end":   end,
-            "sort_order":        "asc",
-        }
-        r = requests.get("https://api.stlouisfed.org/fred/series/observations", params=params, timeout=20)
-        r.raise_for_status()
-        obs = r.json()["observations"]
-        df  = pd.DataFrame(obs)
-        df["Date"]  = pd.to_datetime(df["date"])
-        df["Close"] = pd.to_numeric(df["value"], errors="coerce")
-        df = df.dropna(subset=["Close"])   # FRED uses "." for missing values
-        if df.empty:
-            raise ValueError("FRED gold: no valid observations")
-        return df[["Date", "Close"]]
-
-    @staticmethod
-    def _fetch_gold_yfinance() -> pd.DataFrame:
-        """Fallback 2: yfinance GC=F (Gold Futures)."""
-        import yfinance as yf
-        df = yf.Ticker("GC=F").history(period="max", interval="1d")
-        if df.empty:
-            raise ValueError("yfinance gold: empty")
-        df = df.reset_index()
-        df["Date"]  = pd.to_datetime(df["Date"]).dt.tz_localize(None)
-        df["Close"] = df["Close"].astype(float)
-        return df[["Date", "Close"]]
-
-    @staticmethod
     def fetch_gold_spot() -> Tuple[Any, pd.DataFrame]:
-        """Gold spot price — tries Stooq → FRED → yfinance in order."""
-        last_exc = None
-        for name, fn in [
-            ("Stooq",    DataIngestion._fetch_gold_stooq),
-            ("FRED",     DataIngestion._fetch_gold_fred),
-            ("yfinance", DataIngestion._fetch_gold_yfinance),
-        ]:
-            try:
-                df = fn()
-                df["Date"] = pd.to_datetime(df["Date"])
-                latest_date = df["Date"].max()
-                cutoff      = latest_date - pd.DateOffset(years=CFG.LOOKBACK_YEARS)
-                df          = df[df["Date"] >= cutoff].sort_values("Date").reset_index(drop=True)
-                if df.empty:
-                    raise ValueError(f"{name}: empty after cutoff")
-                latest = df.iloc[-1]
-                print(f"  [OK] gold_spot via {name} — {latest['Date'].date()}  ${latest['Close']:.2f}")
-                return (latest["Date"], float(latest["Close"])), df
-            except Exception as exc:
-                print(f"  [WARN] gold_spot {name} failed: {exc}")
-                last_exc = exc
-        raise ValueError(f"gold_spot: all 3 sources failed. Last: {last_exc}")
+        url = "https://stooq.com/q/d/l/?s=xauusd&i=d"
+        df  = pd.read_csv(url)
+        if df.empty:
+            raise ValueError("Gold data unavailable from Stooq")
+        df["Date"] = pd.to_datetime(df["Date"])
+        latest_date = df["Date"].max()
+        cutoff      = latest_date - pd.DateOffset(years=CFG.LOOKBACK_YEARS)
+        df          = df[df["Date"] >= cutoff].sort_values("Date").reset_index(drop=True)
+        latest      = df.iloc[-1]
+        return (latest["Date"], float(latest["Close"])), df
 
     @staticmethod
     def fetch_fred_series(series_id: str = "DFF") -> Tuple[Any, pd.DataFrame]:
@@ -379,19 +315,82 @@ class DataIngestion:
         return (latest["date"], float(latest["value"])), df
 
     @staticmethod
-    def fetch_usd_inr() -> Tuple[Dict, pd.DataFrame]:
-        url = "https://stooq.com/q/d/l/?s=usdinr&c=1d&i=d"
-        df  = pd.read_csv(url, sep=";")
+    def _fetch_usd_inr_stooq() -> pd.DataFrame:
+        """Primary: Stooq with browser User-Agent."""
+        from io import StringIO
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36"}
+        r = requests.get("https://stooq.com/q/d/l/?s=usdinr&c=1d&i=d", headers=headers, timeout=20)
+        r.raise_for_status()
+        if "No data" in r.text or len(r.text) < 50:
+            raise ValueError(f"Stooq returned no data: {r.text[:100]}")
+        df = pd.read_csv(StringIO(r.text), sep=";")
         if df.empty:
-            raise ValueError("USD-INR data empty")
-        df.columns  = df.columns.str.lower()
+            raise ValueError("Stooq USD/INR: empty after parse")
+        df.columns = df.columns.str.lower()
+        if "close" not in df.columns:
+            raise ValueError(f"Stooq USD/INR: no close column, got {df.columns.tolist()}")
+        df["date"] = pd.to_datetime(df["date"])
+        return df
+
+    @staticmethod
+    def _fetch_usd_inr_fred() -> pd.DataFrame:
+        """Fallback 1: FRED — DEXINUS (India/U.S. Foreign Exchange Rate, INR per USD).
+        Same API already working for fed funds rate — guaranteed reachable."""
+        end   = datetime.now().strftime("%Y-%m-%d")
+        start = (datetime.now() - pd.DateOffset(years=CFG.LOOKBACK_YEARS)).strftime("%Y-%m-%d")
+        params = {
+            "series_id":         "DEXINUS",
+            "api_key":           CFG.FRED_API_KEY,
+            "file_type":         "json",
+            "observation_start": start,
+            "observation_end":   end,
+            "sort_order":        "asc",
+        }
+        r = requests.get("https://api.stlouisfed.org/fred/series/observations", params=params, timeout=20)
+        r.raise_for_status()
+        obs = r.json()["observations"]
+        df  = pd.DataFrame(obs)
         df["date"]  = pd.to_datetime(df["date"])
-        latest_date = df["date"].max()
-        cutoff      = latest_date - pd.DateOffset(years=CFG.LOOKBACK_YEARS)
-        df          = df[df["date"] >= cutoff].sort_values("date").reset_index(drop=True)
-        latest      = df.iloc[-1]
-        info = {"USDINR_Date": str(latest["date"]), "USD_INR": float(latest["close"])}
-        return info, df
+        df["close"] = pd.to_numeric(df["value"], errors="coerce")
+        df = df.dropna(subset=["close"])   # FRED uses "." for missing values
+        if df.empty:
+            raise ValueError("FRED USD/INR: no valid observations")
+        return df[["date", "close"]]
+
+    @staticmethod
+    def _fetch_usd_inr_frankfurter() -> pd.DataFrame:
+        """Fallback 2: Frankfurter API — latest rate only."""
+        r = requests.get("https://api.frankfurter.app/latest?from=USD&to=INR", timeout=15)
+        r.raise_for_status()
+        rate  = float(r.json()["rates"]["INR"])
+        today = pd.Timestamp.today().normalize()
+        return pd.DataFrame({"date": [today], "close": [rate]})
+
+    @staticmethod
+    def fetch_usd_inr() -> Tuple[Dict, pd.DataFrame]:
+        """USD/INR rate — tries Stooq → FRED → Frankfurter in order."""
+        last_exc = None
+        for name, fn in [
+            ("Stooq",       DataIngestion._fetch_usd_inr_stooq),
+            ("FRED",        DataIngestion._fetch_usd_inr_fred),
+            ("Frankfurter", DataIngestion._fetch_usd_inr_frankfurter),
+        ]:
+            try:
+                df = fn()
+                df["date"] = pd.to_datetime(df["date"])
+                latest_date = df["date"].max()
+                cutoff      = latest_date - pd.DateOffset(years=CFG.LOOKBACK_YEARS)
+                df          = df[df["date"] >= cutoff].sort_values("date").reset_index(drop=True)
+                if df.empty:
+                    raise ValueError(f"{name}: empty after cutoff")
+                latest = df.iloc[-1]
+                info = {"USDINR_Date": str(latest["date"]), "USD_INR": float(latest["close"])}
+                print(f"  [OK] usd_inr via {name} — {latest['date'].date()}  ₹{latest['close']:.4f}")
+                return info, df
+            except Exception as exc:
+                print(f"  [WARN] usd_inr {name} failed: {exc}")
+                last_exc = exc
+        raise ValueError(f"usd_inr: all 3 sources failed. Last: {last_exc}")
 
     @staticmethod
     def fetch_gold_import_duty() -> Tuple[Dict, pd.DataFrame]:
