@@ -31,7 +31,6 @@ from dataclasses import dataclass, field
 from typing import Optional, Tuple, Dict, List, Any
 import traceback
 import sys
-import io
 
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
@@ -156,10 +155,7 @@ class DataIngestion:
     def fetch_gold_spot() -> Tuple[Any, pd.DataFrame]:
         """Gold spot price (USD/oz) from Stooq."""
         url = "https://stooq.com/q/d/l/?s=xauusd&i=d"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        r = requests.get(url, headers=headers, timeout=10)
-        r.raise_for_status()
-        df  = pd.read_csv(io.StringIO(r.text))
+        df  = pd.read_csv(url)
         if df.empty:
             raise ValueError("Gold data unavailable from Stooq")
 
