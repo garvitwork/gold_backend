@@ -280,17 +280,70 @@ def safe_run(stage_name: str, func, *args, **kwargs):
 class DataIngestion:
 
     @staticmethod
-    def fetch_gold_spot() -> Tuple[Any, pd.DataFrame]:
+    def _fetch_gold_stooq() -> pd.DataFrame:
+        """Primary: Stooq CSV download."""
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
         url = "https://stooq.com/q/d/l/?s=xauusd&i=d"
-        df  = pd.read_csv(url)
-        if df.empty:
-            raise ValueError("Gold data unavailable from Stooq")
+        resp = requests.get(url, headers=headers, timeout=15)
+        resp.raise_for_status()
+        from io import StringIO
+        df = pd.read_csv(StringIO(resp.text))
+        if df.empty or "Close" not in df.columns:
+            raise ValueError("Stooq gold: empty or bad response")
         df["Date"] = pd.to_datetime(df["Date"])
-        latest_date = df["Date"].max()
-        cutoff      = latest_date - pd.DateOffset(years=CFG.LOOKBACK_YEARS)
-        df          = df[df["Date"] >= cutoff].sort_values("Date").reset_index(drop=True)
-        latest      = df.iloc[-1]
-        return (latest["Date"], float(latest["Close"])), df
+        return df
+
+    @staticmethod
+    def _fetch_gold_yahoo() -> pd.DataFrame:
+        """Fallback 1: Yahoo Finance via yfinance."""
+        import yfinance as yf
+        ticker = yf.Ticker("GC=F")
+        df = ticker.history(period="70y", interval="1d")
+        if df.empty:
+            raise ValueError("Yahoo Finance gold: empty response")
+        df = df.reset_index().rename(columns={"Date": "Date", "Close": "Close"})
+        df["Date"] = pd.to_datetime(df["Date"]).dt.tz_localize(None)
+        return df[["Date", "Close"]]
+
+    @staticmethod
+    def _fetch_gold_metals_api() -> pd.DataFrame:
+        """Fallback 2: metals-api.com for latest price, build synthetic history."""
+        # Uses open metals API — returns only latest, builds single-row df
+        r = requests.get(
+            "https://api.metals.live/v1/spot/gold",
+            timeout=10
+        )
+        r.raise_for_status()
+        price = float(r.json()[0]["price"])
+        today = pd.Timestamp.today().normalize()
+        # Build a minimal 1-row df so pipeline doesn't crash
+        df = pd.DataFrame({"Date": [today], "Close": [price]})
+        return df
+
+    @staticmethod
+    def fetch_gold_spot() -> Tuple[Any, pd.DataFrame]:
+        """Gold spot price with multi-source fallback chain."""
+        last_exc = None
+        for attempt_name, fn in [
+            ("Stooq",       DataIngestion._fetch_gold_stooq),
+            ("Yahoo",       DataIngestion._fetch_gold_yahoo),
+            ("Metals.live", DataIngestion._fetch_gold_metals_api),
+        ]:
+            try:
+                df = fn()
+                df["Date"] = pd.to_datetime(df["Date"])
+                latest_date = df["Date"].max()
+                cutoff      = latest_date - pd.DateOffset(years=CFG.LOOKBACK_YEARS)
+                df          = df[df["Date"] >= cutoff].sort_values("Date").reset_index(drop=True)
+                if df.empty:
+                    raise ValueError(f"{attempt_name}: df empty after cutoff filter")
+                latest = df.iloc[-1]
+                print(f"  [OK] gold_spot via {attempt_name} — latest={latest['Date'].date()} price={latest['Close']:.2f}")
+                return (latest["Date"], float(latest["Close"])), df
+            except Exception as exc:
+                print(f"  [WARN] gold_spot {attempt_name} failed: {exc}")
+                last_exc = exc
+        raise ValueError(f"gold_spot: all sources failed. Last error: {last_exc}")
 
     @staticmethod
     def fetch_fred_series(series_id: str = "DFF") -> Tuple[Any, pd.DataFrame]:
@@ -315,19 +368,70 @@ class DataIngestion:
         return (latest["date"], float(latest["value"])), df
 
     @staticmethod
-    def fetch_usd_inr() -> Tuple[Dict, pd.DataFrame]:
+    def _fetch_usd_inr_stooq() -> pd.DataFrame:
+        """Primary: Stooq CSV."""
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
         url = "https://stooq.com/q/d/l/?s=usdinr&c=1d&i=d"
-        df  = pd.read_csv(url, sep=";")
+        resp = requests.get(url, headers=headers, timeout=15)
+        resp.raise_for_status()
+        from io import StringIO
+        df = pd.read_csv(StringIO(resp.text), sep=";")
         if df.empty:
-            raise ValueError("USD-INR data empty")
-        df.columns  = df.columns.str.lower()
-        df["date"]  = pd.to_datetime(df["date"])
-        latest_date = df["date"].max()
-        cutoff      = latest_date - pd.DateOffset(years=CFG.LOOKBACK_YEARS)
-        df          = df[df["date"] >= cutoff].sort_values("date").reset_index(drop=True)
-        latest      = df.iloc[-1]
-        info = {"USDINR_Date": str(latest["date"]), "USD_INR": float(latest["close"])}
-        return info, df
+            raise ValueError("Stooq USD/INR: empty")
+        df.columns = df.columns.str.lower()
+        df["date"] = pd.to_datetime(df["date"])
+        return df
+
+    @staticmethod
+    def _fetch_usd_inr_yahoo() -> pd.DataFrame:
+        """Fallback 1: Yahoo Finance yfinance."""
+        import yfinance as yf
+        ticker = yf.Ticker("INR=X")
+        df = ticker.history(period="70y", interval="1d")
+        if df.empty:
+            raise ValueError("Yahoo USD/INR: empty")
+        df = df.reset_index()
+        df["date"]  = pd.to_datetime(df["Date"]).dt.tz_localize(None)
+        df["close"] = df["Close"]
+        return df[["date", "close"]]
+
+    @staticmethod
+    def _fetch_usd_inr_frankfurter() -> pd.DataFrame:
+        """Fallback 2: Frankfurter API — latest rate only, builds synthetic history."""
+        r = requests.get("https://api.frankfurter.app/latest?from=USD&to=INR", timeout=10)
+        r.raise_for_status()
+        rate = float(r.json()["rates"]["INR"])
+        today = pd.Timestamp.today().normalize()
+        df = pd.DataFrame({"date": [today], "close": [rate]})
+        return df
+
+    @staticmethod
+    def fetch_usd_inr() -> Tuple[Dict, pd.DataFrame]:
+        """USD/INR rate with multi-source fallback chain."""
+        last_exc = None
+        for attempt_name, fn in [
+            ("Stooq",       DataIngestion._fetch_usd_inr_stooq),
+            ("Yahoo",       DataIngestion._fetch_usd_inr_yahoo),
+            ("Frankfurter", DataIngestion._fetch_usd_inr_frankfurter),
+        ]:
+            try:
+                df = fn()
+                df["date"] = pd.to_datetime(df["date"])
+                if "close" not in df.columns:
+                    raise ValueError(f"{attempt_name}: no 'close' column")
+                latest_date = df["date"].max()
+                cutoff      = latest_date - pd.DateOffset(years=CFG.LOOKBACK_YEARS)
+                df          = df[df["date"] >= cutoff].sort_values("date").reset_index(drop=True)
+                if df.empty:
+                    raise ValueError(f"{attempt_name}: empty after cutoff")
+                latest = df.iloc[-1]
+                info = {"USDINR_Date": str(latest["date"]), "USD_INR": float(latest["close"])}
+                print(f"  [OK] usd_inr via {attempt_name} — latest={latest['date'].date()} rate={latest['close']:.4f}")
+                return info, df
+            except Exception as exc:
+                print(f"  [WARN] usd_inr {attempt_name} failed: {exc}")
+                last_exc = exc
+        raise ValueError(f"usd_inr: all sources failed. Last error: {last_exc}")
 
     @staticmethod
     def fetch_gold_import_duty() -> Tuple[Dict, pd.DataFrame]:
