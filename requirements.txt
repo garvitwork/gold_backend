@@ -16,3 +16,4 @@ dvc
 dagshub
 mlflow
 pytest
+yfinance
