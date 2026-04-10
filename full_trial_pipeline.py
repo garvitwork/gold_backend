@@ -50,7 +50,7 @@ class PipelineConfig:
     """All tuneable knobs live here. Nothing is hardcoded anywhere else."""
 
     # --- API keys ---
-    FRED_API_KEY: str    = "7401d8c19460d9721dd2bcc51ad42e80"
+    FRED_API_KEY: str    = "f017e7a31076c832554ddd36e147dd05"
     SERPAPI_KEY:  str    = "ef9787f70e3e786621da6514eac4a99c3301a5b691c1b6c5d8a6a397cd16ec98"
 
     # --- File paths ---
